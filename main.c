@@ -193,6 +193,14 @@ static void InitLSM() {
 
 static void startMag() {
 	//#CS704 - Write SPI commands to initiliase Magnetometer
+	uint8_t	regData = 0x8C;
+	BSP_LSM303AGR_WriteReg_Mag(0x60,&regData,1);
+	regData = 0x02; //
+	BSP_LSM303AGR_WriteReg_Mag(0x61,&regData,1);
+	regData = 0x10; //
+	BSP_LSM303AGR_WriteReg_Mag(0x62,&regData,1);
+
+
 }
 
 static void startAcc() {
@@ -201,12 +209,12 @@ static void startAcc() {
 	BSP_LSM303AGR_WriteReg_Acc(0x21,&regData,1);
 	BSP_LSM303AGR_WriteReg_Acc(0x22,&regData,1);
 
-	regData = 0x81; //
+	//regData = 0x81; //
+	regData = 0x89; // HR = 0 -> 10 bit output register. BLE = 0 -> LSB at lower register
 	BSP_LSM303AGR_WriteReg_Acc(0x23,&regData,1);
-	regData = 0x57; //enable X,Y,Z, 100hz
+	regData = 0x57; //enable X,Y,Z, 100hz, Lpen off
 	BSP_LSM303AGR_WriteReg_Acc(0x20,&regData,1);
 
-	BSP_LSM303AGR_ReadReg_Acc(0x27,&regData,1);
 
 }
 
@@ -214,12 +222,38 @@ static void readMag() {
 
 	//#CS704 - Read Magnetometer Data over SPI
 
-	//#CS704 - store sensor values into the variables below
-	MAG_Value.x+=1;
-	MAG_Value.y=200;
-	MAG_Value.z=1000;
+	uint8_t a[6];
+	static int16_t readX;
+	static int16_t readY;
+	static int16_t readZ;
+//	BSP_LSM303AGR_ReadReg_Mag(0x68, &readX,2);
+//	BSP_LSM303AGR_ReadReg_Mag(0x6A,&readY,2);
+//	BSP_LSM303AGR_ReadReg_Mag(0x6C,&readZ,2);
 
-//	XPRINTF("MAG=%d,%d,%d\r\n",MAG_Value.x,MAG_Value.y,MAG_Value.z);
+	BSP_LSM303AGR_ReadReg_Mag(0x68, a,2);
+	BSP_LSM303AGR_ReadReg_Mag(0x6A,a+2,2);
+	BSP_LSM303AGR_ReadReg_Mag(0x6C,a+4,2);
+
+	 readX = (int16_t)((a[1] << 8) | a[0]);
+	 readY = (int16_t)((a[3] << 8) | a[2]);
+	 readZ = (int16_t)((a[5] << 8) | a[4]);
+
+	//#CS704 - store sensor values into the variables below
+	MAG_Value.x = (int)readX;
+	MAG_Value.y= (int)readY;
+
+
+
+
+	int heading = atan2(readY, readX) * (180/3.1415) - 180;
+	if (heading < 0)
+	{
+		heading += 360;
+	}
+
+	MAG_Value.z= (int)heading; //dont need to use the Z anyways.
+	XPRINTF("Heading=%d \r\n",heading);
+	XPRINTF("MAG=%d,%d,%d\r\n",MAG_Value.x,MAG_Value.y,MAG_Value.z);
 }
 
 static void readAcc() {
@@ -227,25 +261,58 @@ static void readAcc() {
 	//#CS704 - Read Accelerometer Data over SPI
 
 	//#CS704 - store sensor values into the variables below
+	uint8_t a[6];
 
-	uint16_t readX;
-	uint16_t readY;
-	uint16_t readZ;
-//	ACC_Value.x=100;
-//	ACC_Value.y=200;
-//	ACC_Value.z=1000;
-//	BSP_LSM303AGR_ReadReg_Acc(0x28,&read1,1);
-	BSP_LSM303AGR_ReadReg_Acc(0x28, &readX,2);
-	BSP_LSM303AGR_ReadReg_Acc(0x2A,&readY,2);
-	BSP_LSM303AGR_ReadReg_Acc(0x2C,&readZ,2);
+	static int16_t readX;
+	static int16_t readY;
+	static int16_t readZ;
+
+
+	BSP_LSM303AGR_ReadReg_Acc(0x28, a,2);
+	BSP_LSM303AGR_ReadReg_Acc(0x2A, a+2,2);
+	BSP_LSM303AGR_ReadReg_Acc(0x2C, a+4,2);
+//	BSP_LSM303AGR_ReadReg_Acc(0x2A,&readY,2);
+//	BSP_LSM303AGR_ReadReg_Acc(0x2C,&readZ,2);
+//	 readX = (int16_t)((a[0] << 2) | a[0])<<4;
+//	 readY = (int16_t)((a[2] << 2) | a[2])<<4;
+//	 readZ = (int16_t)((a[4] << 2) | a[4])<<4;
+	 readX = (int16_t)((a[1] << 8) | a[0]);
+	 readY = (int16_t)((a[3] << 8) | a[2]);
+	 readZ = (int16_t)((a[5] << 8) | a[4]);
+
+//	 if (readX & 0x800) {  // Check if the sign bit is set
+//		 ACC_Value.x = -((~readX + 1) & 0xFFFF);  // If set, negate using two's complement method
+//	 } else {
+//		 ACC_Value.x  = readX;  // If not set, value is positive
+//	 }
+//	 if (readY & 0x800) {  // Check if the sign bit is set
+//		 ACC_Value.y = -((~readY + 1) & 0xFFFF);  // If set, negate using two's complement method
+//	 } else {
+//		 ACC_Value.y  = readY;  // If not set, value is positive
+//	 }
+//
+//	 if (readZ & 0x800) {  // Check if the sign bit is set
+//		 ACC_Value.z = -((~readZ + 1) & 0xFFFF);  // If set, negate using two's complement method
+//	 } else {
+//		 ACC_Value.z  = readZ;  // If not set, value is positive
+//	 }
+//		ACC_Value.x = *(int16_t*)(a);
+//		ACC_Value.y = *(int16_t*)(a+2);
+//		ACC_Value.z = *(int16_t*)(a+4);
+
 	ACC_Value.x = (int)readX;
-	ACC_Value.z = (int)readY;
-	ACC_Value.y = (int)readZ;
+	ACC_Value.y = (int)readY;
+	ACC_Value.z = (int)readZ;
 
 
-	XPRINTF("ffACC=%d,%d,%d\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z);
+	XPRINTF("ACC=%d,%d,%d\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z);
 }
 
+/**
+  * @brief  Main program
+  * @param  None
+  * @retval None
+  */
 /**
   * @brief  Main program
   * @param  None
