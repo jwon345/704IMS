@@ -271,14 +271,12 @@ static void readAcc() {
 	BSP_LSM303AGR_ReadReg_Acc(0x28, a,2);
 	BSP_LSM303AGR_ReadReg_Acc(0x2A, a+2,2);
 	BSP_LSM303AGR_ReadReg_Acc(0x2C, a+4,2);
-//	BSP_LSM303AGR_ReadReg_Acc(0x2A,&readY,2);
-//	BSP_LSM303AGR_ReadReg_Acc(0x2C,&readZ,2);
-//	 readX = (int16_t)((a[0] << 2) | a[0])<<4;
-//	 readY = (int16_t)((a[2] << 2) | a[2])<<4;
-//	 readZ = (int16_t)((a[4] << 2) | a[4])<<4;
-	 readX = (int16_t)((a[1] << 8) | a[0]);
-	 readY = (int16_t)((a[3] << 8) | a[2]);
-	 readZ = (int16_t)((a[5] << 8) | a[4]);
+	 readX = (int16_t)((a[1] << 8) | a[0])>>4;
+	 readY = (int16_t)((a[3] << 8) | a[2])>>4;
+	 readZ = (int16_t)((a[5] << 8) | a[4])>>4;
+	//  readX = (int16_t)((a[1] << 8) | a[0]);
+	//  readY = (int16_t)((a[3] << 8) | a[2]);
+	//  readZ = (int16_t)((a[5] << 8) | a[4]);
 
 //	 if (readX & 0x800) {  // Check if the sign bit is set
 //		 ACC_Value.x = -((~readX + 1) & 0xFFFF);  // If set, negate using two's complement method
@@ -300,19 +298,18 @@ static void readAcc() {
 //		ACC_Value.y = *(int16_t*)(a+2);
 //		ACC_Value.z = *(int16_t*)(a+4);
 
+
 	ACC_Value.x = (int)readX;
 	ACC_Value.y = (int)readY;
 	ACC_Value.z = (int)readZ;
+
+  // gets the value normal value of acceleration in terms of 1e-3*G ==> where G is a unit of gravity acceleration 
+	COMP_Value.x = (int)sqrt(ACC_Value.x*ACC_Value.x + ACC_Value.y*ACC_Value.y + ACC_Value.z * ACC_Value.z) - 1000;
 
 
 	XPRINTF("ACC=%d,%d,%d\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z);
 }
 
-/**
-  * @brief  Main program
-  * @param  None
-  * @retval None
-  */
 /**
   * @brief  Main program
   * @param  None
@@ -363,6 +360,7 @@ int main(void)
   startMag();
   startAcc();
 
+
   //***************************************************
   //***************************************************
   //************ Initialise ends **********************
@@ -408,9 +406,10 @@ int main(void)
 
 	//*********process sensor data*********
 
-    	COMP_Value.x++;
-    	COMP_Value.y=120;
-    	COMP_Value.Heading+=10;
+
+    	// COMP_Value.x++;
+    	// COMP_Value.y=120;
+    	// COMP_Value.Heading+=10;
 
     }
 
