@@ -171,6 +171,23 @@ void LSM303AGR_SPI_Read_nBytes(SPI_HandleTypeDef* xSpiHandle, uint8_t *val, uint
 void LSM303AGR_SPI_Read(SPI_HandleTypeDef* xSpiHandle, uint8_t *val);
 void LSM303AGR_SPI_Write(SPI_HandleTypeDef* xSpiHandle, uint8_t val);
 
+///MY variables
+static int initalDegreeOffset = 0;
+
+int initalAveragingCount = 10;
+int globalHeading = 0;
+
+
+int findMax(int arrayWindow[], int size){
+	int maxValue = 0;
+	for (int i = 0; i < size; i++)
+	{
+		if (arrayWindow[i] > maxValue){
+			maxValue = arrayWindow[i];
+		}
+	}
+	return maxValue;
+}
 
 static void InitLSM() {
 	uint8_t inData[10];
@@ -201,6 +218,21 @@ static void startMag() {
 	BSP_LSM303AGR_WriteReg_Mag(0x62,&regData,1);
 
 
+	uint8_t a[6];
+	static int16_t readX;
+	static int16_t readY;
+	BSP_LSM303AGR_ReadReg_Mag(0x68, a,2);
+	BSP_LSM303AGR_ReadReg_Mag(0x6A,a+2,2);
+	readX = (int16_t)((a[1] << 8) | a[0]);
+	readY = (int16_t)((a[3] << 8) | a[2]);
+
+	initalDegreeOffset = atan2(readY, readX) * (180/3.1415) - 180;
+	if (initalDegreeOffset < -1)
+	{
+		initalDegreeOffset += 360;
+	}
+
+
 }
 
 static void startAcc() {
@@ -221,6 +253,10 @@ static void startAcc() {
 static void readMag() {
 
 	//#CS704 - Read Magnetometer Data over SPI
+
+	static uint8_t counter = 0;
+	static int sum = 0;
+	static int heading = 0;
 
 	uint8_t a[6];
 	static int16_t readX;
@@ -244,15 +280,36 @@ static void readMag() {
 
 
 
+	int oldHeading = atan2(readY, readX) * (180/3.1415) -180;
+		if (oldHeading < 0)
+		{
+			oldHeading += 360;
+		}
 
-	int heading = atan2(readY, readX) * (180/3.1415) - 180;
+
+	heading = (int)oldHeading - initalDegreeOffset;
+
 	if (heading < 0)
 	{
 		heading += 360;
 	}
 
+	globalHeading = heading;
+
+	if (counter < initalAveragingCount)
+	{
+		counter++;
+		sum += oldHeading;
+	}
+	else if (counter < initalAveragingCount + 1)
+	{
+		counter++;
+		initalDegreeOffset = (int)oldHeading;
+	}
+
+
 	MAG_Value.z= (int)heading; //dont need to use the Z anyways.
-	XPRINTF("Heading=%d \r\n",heading);
+	XPRINTF("Heading=%d  prev=%d\r\n",heading, oldHeading);
 	XPRINTF("MAG=%d,%d,%d\r\n",MAG_Value.x,MAG_Value.y,MAG_Value.z);
 }
 
@@ -267,6 +324,11 @@ static void readAcc() {
 	static int16_t readY;
 	static int16_t readZ;
 
+	static int stepState = 0;
+	static int stepCounter = 0;
+	int stepThreshold = 300; //accel in mG. Emperically discovered value for step recognition
+
+	static int Magnitude = 0;
 
 	BSP_LSM303AGR_ReadReg_Acc(0x28, a,2);
 	BSP_LSM303AGR_ReadReg_Acc(0x2A, a+2,2);
@@ -274,40 +336,35 @@ static void readAcc() {
 	 readX = (int16_t)((a[1] << 8) | a[0])>>4;
 	 readY = (int16_t)((a[3] << 8) | a[2])>>4;
 	 readZ = (int16_t)((a[5] << 8) | a[4])>>4;
-	//  readX = (int16_t)((a[1] << 8) | a[0]);
-	//  readY = (int16_t)((a[3] << 8) | a[2]);
-	//  readZ = (int16_t)((a[5] << 8) | a[4]);
-
-//	 if (readX & 0x800) {  // Check if the sign bit is set
-//		 ACC_Value.x = -((~readX + 1) & 0xFFFF);  // If set, negate using two's complement method
-//	 } else {
-//		 ACC_Value.x  = readX;  // If not set, value is positive
-//	 }
-//	 if (readY & 0x800) {  // Check if the sign bit is set
-//		 ACC_Value.y = -((~readY + 1) & 0xFFFF);  // If set, negate using two's complement method
-//	 } else {
-//		 ACC_Value.y  = readY;  // If not set, value is positive
-//	 }
-//
-//	 if (readZ & 0x800) {  // Check if the sign bit is set
-//		 ACC_Value.z = -((~readZ + 1) & 0xFFFF);  // If set, negate using two's complement method
-//	 } else {
-//		 ACC_Value.z  = readZ;  // If not set, value is positive
-//	 }
-//		ACC_Value.x = *(int16_t*)(a);
-//		ACC_Value.y = *(int16_t*)(a+2);
-//		ACC_Value.z = *(int16_t*)(a+4);
 
 
 	ACC_Value.x = (int)readX;
 	ACC_Value.y = (int)readY;
 	ACC_Value.z = (int)readZ;
 
-  // gets the value normal value of acceleration in terms of 1e-3*G ==> where G is a unit of gravity acceleration 
-	COMP_Value.x = (int)sqrt(ACC_Value.x*ACC_Value.x + ACC_Value.y*ACC_Value.y + ACC_Value.z * ACC_Value.z) - 1000;
+  // gets the value normal value of acceleration in terms of 1e-3*G ==> where G is a unit of gravity acceleration
+	Magnitude = (int)sqrt(ACC_Value.x*ACC_Value.x + ACC_Value.y*ACC_Value.y + ACC_Value.z * ACC_Value.z) - 1000;
+	COMP_Value.x = Magnitude;
+
+	if ((Magnitude > stepThreshold) && (stepState == 0))
+	{
+		XPRINTF("Stepped");
+		stepState = 1; //stepped, waiting for the
+	}
+
+	if (((int)Magnitude < -10 ) && (stepState == 1))
+	{
+		stepState = 0; //stepped, waiting for the
+		COMP_Value.y += 100;
+		stepCounter += 1;
+		XPRINTF("Stepped");
+		COMP_Value.y = 10*cos(globalHeading);
+		COMP_Value.Heading = 10*sin(globalHeading);
+
+	}
 
 
-	XPRINTF("ACC=%d,%d,%d\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z);
+	XPRINTF("ACC=%d,%d,%d,  MAG = %d StepState = %d  initOffset = %d \r\n\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z, COMP_Value.x, stepState, initalDegreeOffset);
 }
 
 /**
@@ -408,7 +465,6 @@ int main(void)
 
 
     	// COMP_Value.x++;
-    	// COMP_Value.y=120;
     	// COMP_Value.Heading+=10;
 
     }
@@ -1215,7 +1271,3 @@ void assert_failed(uint8_t* file, uint32_t line)
   }
 }
 #endif
-
-
-
-
