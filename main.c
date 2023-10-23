@@ -50,10 +50,10 @@
 
 #include "SensorTile_bus.h"
 
-   
+
 /* Private typedef -----------------------------------------------------------*/
 
-  
+
 /* Private define ------------------------------------------------------------*/
 
 
@@ -101,10 +101,10 @@ extern int connected;
   extern TIM_HandleTypeDef  TimHandle;
   extern void CDC_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 #endif /* ALLMEMS1_ENABLE_PRINTF */
-    
+
 /* BlueNRG SPI */
 extern SPI_HandleTypeDef SPI_SD_Handle;
-    
+
 extern volatile float RMS_Ch[];
 extern float DBNOISE_Value_Old_Ch[];
 extern uint16_t PCM_Buffer[];
@@ -174,8 +174,10 @@ void LSM303AGR_SPI_Write(SPI_HandleTypeDef* xSpiHandle, uint8_t val);
 ///MY variables
 static int initalDegreeOffset = 0;
 
-int initalAveragingCount = 10;
+int initalAveragingCount = 500;
+static uint16_t counter = 0;
 int globalHeading = 0;
+
 
 
 int findMax(int arrayWindow[], int size){
@@ -218,36 +220,6 @@ static void startMag() {
 	BSP_LSM303AGR_WriteReg_Mag(0x62,&regData,1);
 
 
-	//Hard Iron Compenstaion
-//	regData = 0x6D; //
-//	BSP_LSM303AGR_WriteReg_Mag(0x45,&regData,1);
-//	regData = 0x01; //
-//	BSP_LSM303AGR_WriteReg_Mag(0x46,&regData,1);
-//
-//
-//	regData = 0xC7; //
-//	BSP_LSM303AGR_WriteReg_Mag(0x47,&regData,1);
-//	regData = 0xFE; //
-//	BSP_LSM303AGR_WriteReg_Mag(0x48,&regData,1);
-
-
-	uint8_t a[6];
-	static int16_t readX;
-	static int16_t readY;
-	BSP_LSM303AGR_ReadReg_Mag(0x68, a,2);
-	BSP_LSM303AGR_ReadReg_Mag(0x6A,a+2,2);
-	readX = (int16_t)((a[1] << 8) | a[0]);
-	readY = (int16_t)((a[3] << 8) | a[2]);
-
-
-
-	initalDegreeOffset = atan2(readY, readX) * (180/3.1415) - 180;
-	if (initalDegreeOffset < -1)
-	{
-		initalDegreeOffset += 360;
-	}
-
-
 }
 
 static void startAcc() {
@@ -269,7 +241,7 @@ static void readMag() {
 
 	//#CS704 - Read Magnetometer Data over SPI
 
-	static uint8_t counter = 0;
+
 	static int sum = 0;
 	static int heading = 0;
 
@@ -279,9 +251,6 @@ static void readMag() {
 	static int16_t readX;
 	static int16_t readY;
 	static int16_t readZ;
-//	BSP_LSM303AGR_ReadReg_Mag(0x68, &readX,2);
-//	BSP_LSM303AGR_ReadReg_Mag(0x6A,&readY,2);
-//	BSP_LSM303AGR_ReadReg_Mag(0x6C,&readZ,2);
 
 	BSP_LSM303AGR_ReadReg_Mag(0x68, a,2);
 	BSP_LSM303AGR_ReadReg_Mag(0x6A,a+2,2);
@@ -296,16 +265,20 @@ static void readMag() {
 	MAG_Value.y= (int)readY;
 
 
-
+	//data gathering for the Hard Iron compensation
 	if (minX > readX) minX = readX;
 	if (maxX < readX) maxX = readX;
 
 	if (minY > readY) minY = readY;
 	if (maxY < readY) maxY = readY;
 
+
 	//Hard Iron compenstation
-	readX -= 163.5;
-	readY -= -175.5;
+	readX -= (minX+maxX)/2;
+	readY -= (minY+maxY)/2;
+
+	//	readX -= -31.5;
+	//	readY -= -405;
 
 
 	int oldHeading = atan2(readY, readX) * (180/3.1415) -180;
@@ -324,10 +297,11 @@ static void readMag() {
 
 	globalHeading = heading;
 
+	//init sequence for calibration
 	if (counter < initalAveragingCount)
 	{
 		counter++;
-		sum += oldHeading;
+		XPRINTF("counter = %d \r\n",counter);
 	}
 	else if (counter < initalAveragingCount + 1)
 	{
@@ -357,7 +331,11 @@ static void readAcc() {
 	static int stepCounter = 0;
 	int stepThreshold = 300; //accel in mG. Emperically discovered value for step recognition
 
+	static int maxA,minA = 0;
+
 	static int Magnitude = 0;
+
+	static int strideLength = 0;
 
 	BSP_LSM303AGR_ReadReg_Acc(0x28, a,2);
 	BSP_LSM303AGR_ReadReg_Acc(0x2A, a+2,2);
@@ -373,25 +351,42 @@ static void readAcc() {
 
   // gets the value normal value of acceleration in terms of 1e-3*G ==> where G is a unit of gravity acceleration
 	Magnitude = (int)sqrt(ACC_Value.x*ACC_Value.x + ACC_Value.y*ACC_Value.y + ACC_Value.z * ACC_Value.z) - 1000;
-	COMP_Value.Heading = Magnitude;
+	COMP_Value.Heading = globalHeading*10;
 
-	if ((Magnitude > stepThreshold) && (stepState == 0))
+
+	//Only register steps when calibrated.
+	if (counter > initalAveragingCount)
 	{
-		XPRINTF("Stepped");
-		stepState = 1; //stepped, waiting for the
+		if ((Magnitude > stepThreshold) && (stepState == 0))
+		{
+			maxA = Magnitude;
+			XPRINTF("Stepped");
+			stepState = 1; //stepped, waiting for the
+		}
+
+		if ((Magnitude > maxA)&& (stepState == 1))
+		{
+
+		}
+
+		if (((int)Magnitude < -10 ) && (stepState == 1))
+		{
+			stepState = 0; //stepped, waiting for the
+			stepCounter += 1;
+			minA = Magnitude;
+
+			strideLength = 2 * 9.81 * pow(maxA-minA,0.25);
+
+			int A = strideLength*cos(((float)globalHeading/180)*3.1415);
+			int B = strideLength*sin(((float)globalHeading/180)*3.1415);
+			COMP_Value.y += strideLength*cos(((float)globalHeading/180)*3.1415);
+			COMP_Value.x += strideLength*sin(((float)globalHeading/180)*3.1415);
+
+			maxA = 0;
+			XPRINTF("GlobalHeading =%d X=%d, Y=%d  \r\n",globalHeading,A,B);
+		}
 	}
 
-	if (((int)Magnitude < -10 ) && (stepState == 1))
-	{
-		stepState = 0; //stepped, waiting for the
-		stepCounter += 1;
-		XPRINTF("Stepped");
-		int A = 100*cos(((float)globalHeading/180)*3.1415);
-		int B = 100*sin(((float)globalHeading/180)*3.1415);
-		COMP_Value.y += 100*cos(((float)globalHeading/180)*3.1415);
-		COMP_Value.x += 100*sin(((float)globalHeading/180)*3.1415);
-		XPRINTF("GlobalHeading =%d X=%d, Y=%d  \r\n",globalHeading,A,B);
-	}
 
 
 //	XPRINTF("ACC=%d,%d,%d,  MAG = %d StepState = %d  initOffset = %d \r\n\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z, COMP_Value.x, stepState, initalDegreeOffset);
@@ -404,7 +399,7 @@ static void readAcc() {
   */
 int main(void)
 {
-  
+
   HAL_Init();
 
   // Configure the System clock
@@ -556,7 +551,7 @@ void InitTargetPlatform(void)
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
   uint32_t uhCapture=0;
-  
+
 
 
   /* TIM1_CH4 toggling with frequency = 20 Hz */
@@ -612,12 +607,12 @@ static void SendMotionData(void)
  */
 static void InitTimers(void)
 {
-  
+
   uint32_t uwPrescalerValue;
-  
+
   /* Timer Output Compare Configuration Structure declaration */
   TIM_OC_InitTypeDef sConfig;
-  
+
   /* Compute the prescaler value to have TIM4 counter clock equal to 10 KHz Hz */
 
  // #CS704 -  change TIM4 configuration here to change frequency of execution of *** READ Sensor and Process Block **
@@ -637,7 +632,7 @@ static void InitTimers(void)
 
   /* Compute the prescaler value to have TIM1 counter clock equal to 10 KHz */
   uwPrescalerValue = (uint32_t) ((SystemCoreClock / 10000) - 1); 
-  
+
   /* Set TIM1 instance ( Motion ) */
   TimCCHandle.Instance = TIM1;  
   TimCCHandle.Init.Period        = 65535;
@@ -649,7 +644,7 @@ static void InitTimers(void)
     /* Initialization Error */
     Error_Handler();
   }
-  
+
  /* Configure the Output Compare channels */
  /* Common configuration for all channels */
   sConfig.OCMode     = TIM_OCMODE_TOGGLE;
@@ -1048,7 +1043,7 @@ static void Init_BlueNRG_Stack(void)
   uint8_t  data_len_out;
   uint8_t  hwVersion;
   uint16_t fwVersion;
-  
+
 
 
 //  for(int i=0; i<7; i++)
@@ -1056,25 +1051,25 @@ static void Init_BlueNRG_Stack(void)
 
   for(int i=0; i<7; i++)
     BoardName[i]= customName[i];
-  
+
   BoardName[7]= 0;
-  
+
   /* Initialize the BlueNRG SPI driver */
   hci_init(HCI_Event_CB, NULL);
 
   /* get the BlueNRG HW and FW versions */
   getBlueNRGVersion(&hwVersion, &fwVersion);
-  
+
   aci_hal_read_config_data(CONFIG_DATA_RANDOM_ADDRESS, 6, &data_len_out, bdaddr);
 
   if ((bdaddr[5] & 0xC0) != 0xC0) {
     XPRINTF("\r\nStatic Random address not well formed.\r\n");
     while(1);
   }
-  
+
   ret = aci_hal_write_config_data(CONFIG_DATA_PUBADDR_OFFSET, data_len_out,
                                   bdaddr);
-  
+
 /* Sw reset of the device */
   hci_reset();
 
@@ -1137,7 +1132,7 @@ fail:
 static void Init_BlueNRG_Custom_Services(void)
 {
   int ret;
-  
+
   ret = Add_HW_SW_ServW2ST_Service();
   if(ret == BLE_STATUS_SUCCESS)
   {
@@ -1174,20 +1169,20 @@ static void SystemClock_Config(void)
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
-  
+
   __HAL_RCC_PWR_CLK_ENABLE();
   HAL_PWR_EnableBkUpAccess();
-  
+
   /* Enable the LSE Oscilator */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK){
     while(1);
   }
-  
+
   /* Enable the CSS interrupt in case LSE signal is corrupted or not present */
   HAL_RCCEx_DisableLSECSS();
-  
+
   /* Enable MSI Oscillator and activate PLL with MSI as source */
   RCC_OscInitStruct.OscillatorType      = RCC_OSCILLATORTYPE_MSI;
   RCC_OscInitStruct.MSIState            = RCC_MSI_ON;
@@ -1203,22 +1198,22 @@ static void SystemClock_Config(void)
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK){
     while(1);
   }
-  
+
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_RTC;
   PeriphClkInitStruct.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
   if(HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
   {
     while(1);
   }
-  
+
   /* Enable MSI Auto-calibration through LSE */
   HAL_RCCEx_EnableMSIPLLMode();
-  
+
   /* Select MSI output as USB clock source */
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USB;
   PeriphClkInitStruct.UsbClockSelection = RCC_USBCLKSOURCE_MSI;
   HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct);
-  
+
   /* Select PLL as system clock source and configure the HCLK, PCLK1 and PCLK2 
   clocks dividers */
   RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
