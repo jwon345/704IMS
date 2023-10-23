@@ -144,9 +144,9 @@ static volatile uint32_t SendAccGyroMag  =0;
 static volatile uint32_t TimeStamp = 0;
 volatile uint32_t HCI_ProcessEvent=0;
 typedef struct  {
-	 uint32_t x;
-	 uint32_t y;
-	 uint32_t Heading;
+	 int32_t x;
+	 int32_t y;
+	 int32_t Heading;
 }COMP_Data;
 BSP_MOTION_SENSOR_Axes_t ACC_Value;
 COMP_Data COMP_Value;
@@ -218,6 +218,19 @@ static void startMag() {
 	BSP_LSM303AGR_WriteReg_Mag(0x62,&regData,1);
 
 
+	//Hard Iron Compenstaion
+//	regData = 0x6D; //
+//	BSP_LSM303AGR_WriteReg_Mag(0x45,&regData,1);
+//	regData = 0x01; //
+//	BSP_LSM303AGR_WriteReg_Mag(0x46,&regData,1);
+//
+//
+//	regData = 0xC7; //
+//	BSP_LSM303AGR_WriteReg_Mag(0x47,&regData,1);
+//	regData = 0xFE; //
+//	BSP_LSM303AGR_WriteReg_Mag(0x48,&regData,1);
+
+
 	uint8_t a[6];
 	static int16_t readX;
 	static int16_t readY;
@@ -225,6 +238,8 @@ static void startMag() {
 	BSP_LSM303AGR_ReadReg_Mag(0x6A,a+2,2);
 	readX = (int16_t)((a[1] << 8) | a[0]);
 	readY = (int16_t)((a[3] << 8) | a[2]);
+
+
 
 	initalDegreeOffset = atan2(readY, readX) * (180/3.1415) - 180;
 	if (initalDegreeOffset < -1)
@@ -258,6 +273,8 @@ static void readMag() {
 	static int sum = 0;
 	static int heading = 0;
 
+	static int minX, maxX, minY,maxY = 0;
+
 	uint8_t a[6];
 	static int16_t readX;
 	static int16_t readY;
@@ -270,14 +287,25 @@ static void readMag() {
 	BSP_LSM303AGR_ReadReg_Mag(0x6A,a+2,2);
 	BSP_LSM303AGR_ReadReg_Mag(0x6C,a+4,2);
 
-	 readX = (int16_t)((a[1] << 8) | a[0]);
-	 readY = (int16_t)((a[3] << 8) | a[2]);
-	 readZ = (int16_t)((a[5] << 8) | a[4]);
+	 readX = (int16_t)((a[1] << 8) | a[0])*1.5;
+	 readY = (int16_t)((a[3] << 8) | a[2])*1.5;
+	 readZ = (int16_t)((a[5] << 8) | a[4])*1.5;
 
 	//#CS704 - store sensor values into the variables below
 	MAG_Value.x = (int)readX;
 	MAG_Value.y= (int)readY;
 
+
+
+	if (minX > readX) minX = readX;
+	if (maxX < readX) maxX = readX;
+
+	if (minY > readY) minY = readY;
+	if (maxY < readY) maxY = readY;
+
+	//Hard Iron compenstation
+	readX -= 163.5;
+	readY -= -175.5;
 
 
 	int oldHeading = atan2(readY, readX) * (180/3.1415) -180;
@@ -309,8 +337,9 @@ static void readMag() {
 
 
 	MAG_Value.z= (int)heading; //dont need to use the Z anyways.
-	XPRINTF("Heading=%d  prev=%d\r\n",heading, oldHeading);
+	XPRINTF("Heading=%d  prev=%d   Offset =%d GlobalHeading=%d\r\n ",heading, oldHeading,initalDegreeOffset, globalHeading );
 	XPRINTF("MAG=%d,%d,%d\r\n",MAG_Value.x,MAG_Value.y,MAG_Value.z);
+	XPRINTF("minX = %d, maxX = %d, minY = %d, maxY = %d \r\n",minX,maxX,minY,maxY);
 }
 
 static void readAcc() {
@@ -344,7 +373,7 @@ static void readAcc() {
 
   // gets the value normal value of acceleration in terms of 1e-3*G ==> where G is a unit of gravity acceleration
 	Magnitude = (int)sqrt(ACC_Value.x*ACC_Value.x + ACC_Value.y*ACC_Value.y + ACC_Value.z * ACC_Value.z) - 1000;
-	COMP_Value.x = Magnitude;
+	COMP_Value.Heading = Magnitude;
 
 	if ((Magnitude > stepThreshold) && (stepState == 0))
 	{
@@ -355,16 +384,17 @@ static void readAcc() {
 	if (((int)Magnitude < -10 ) && (stepState == 1))
 	{
 		stepState = 0; //stepped, waiting for the
-		COMP_Value.y += 100;
 		stepCounter += 1;
 		XPRINTF("Stepped");
-		COMP_Value.y = 10*cos(globalHeading);
-		COMP_Value.Heading = 10*sin(globalHeading);
-
+		int A = 100*cos(((float)globalHeading/180)*3.1415);
+		int B = 100*sin(((float)globalHeading/180)*3.1415);
+		COMP_Value.y += 100*cos(((float)globalHeading/180)*3.1415);
+		COMP_Value.x += 100*sin(((float)globalHeading/180)*3.1415);
+		XPRINTF("GlobalHeading =%d X=%d, Y=%d  \r\n",globalHeading,A,B);
 	}
 
 
-	XPRINTF("ACC=%d,%d,%d,  MAG = %d StepState = %d  initOffset = %d \r\n\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z, COMP_Value.x, stepState, initalDegreeOffset);
+//	XPRINTF("ACC=%d,%d,%d,  MAG = %d StepState = %d  initOffset = %d \r\n\r\n",ACC_Value.x,ACC_Value.y,ACC_Value.z, COMP_Value.x, stepState, initalDegreeOffset);
 }
 
 /**
